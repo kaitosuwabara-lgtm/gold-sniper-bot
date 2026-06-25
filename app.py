@@ -9,7 +9,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Gold Smart Market Structure Bot (Lux-Style) is Scanning Live!"
+    return "Gold Smart Market Structure Bot is Online and Scanning!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 5000))
@@ -18,7 +18,6 @@ def run_web_server():
 # --- Bot Configuration ---
 TOKEN = "8894597120:AAGJ7p5YrFFgiBAzz_fuUH-wZ-MHYwaxnyQ"
 CHAT_ID = "6110929945"
-# Kumukuha ng 50 candles para sa tumpak na pagkalkula ng Supply/Demand at CHoCH
 URL = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1m&limit=50"
 
 def send_telegram_alert(message):
@@ -43,6 +42,10 @@ def bot_loop():
         try:
             response = requests.get(URL, timeout=5).json()
             
+            if not isinstance(response, list) or len(response) < 30:
+                time.sleep(10)
+                continue
+            
             candles = []
             for c in response:
                 candles.append({
@@ -52,29 +55,21 @@ def bot_loop():
                     'close': float(c[4])
                 })
             
-            if len(candles) < 30:
-                time.sleep(10)
-                continue
-
             current_price = candles[-1]['close']
 
             if bot_state == "SCANNING":
-                # 1. Tukuyin ang Supply & Demand Zones (Nakaraang 25 kandila)
+                # 1. Supply & Demand Zones (Nakaraang 25 kandila)
                 lookback_candles = candles[-26:-1]
-                supply_zone = max(x['high'] for x in lookback_candles)  # Pulang Kahon (Top)
-                demand_zone = min(x['low'] for x in range_candles := lookback_candles)   # Berdeng Kahon (Bottom)
+                supply_zone = max(x['high'] for x in lookback_candles)  # Pulang Box
+                demand_zone = min(x['low'] for x in lookback_candles)    # Berdeng Box
                 
-                # 2. Track Market Structure (CHoCH detection)
+                # 2. Smooth Trend Line for CHoCH confirmation
+                short_ma = sum(x['close'] for x in candles[-10:-1]) / 9
+                
                 last_candle = candles[-2]
                 prev_candle = candles[-3]
                 
-                # Simulating a Momentum Trend Overlay (Buy/Sell Trigger)
-                # Gagamit ng 10-period smooth tracking para malaman ang momentum direction
-                short_ma = sum(x['close'] for x in candles[-10:-1]) / 9
-                long_ma = sum(x['close'] for x in candles[-25:-1]) / 24
-                
-                # 🟥 AUTOMATED SELL SIGNAL CONFLUENCE
-                # Ang presyo ay pumasok/lumapit sa Supply Zone AT nagkaroon ng Bearish Crossover (CHoCH/Sell)
+                # 🟥 AUTOMATED SELL SIGNAL (Supply Zone + Bearish Crossover)
                 if last_candle['high'] >= (supply_zone - 0.20) and prev_candle['close'] > short_ma and last_candle['close'] < short_ma:
                     risk = supply_zone - current_price
                     if risk > 0.15:
@@ -82,7 +77,7 @@ def bot_loop():
                         trade_type = "SHORT"
                         entry_target = current_price
                         sl_target = supply_zone + 0.15  # SL sa itaas ng Supply Zone
-                        tp_target = current_price - (risk * 2.5)  # 2.5:1 Risk-Reward Target
+                        tp_target = current_price - (risk * 2.5)  # 2.5:1 Risk Reward
                         
                         msg = (
                             "🟥🟥🟥🟥🟥🟥🟥🟥🟥\n"
@@ -96,8 +91,7 @@ def bot_loop():
                         )
                         send_telegram_alert(msg)
 
-                # 🟩 AUTOMATED BUY SIGNAL CONFLUENCE
-                # Ang presyo ay pumasok/lumapit sa Demand Zone AT nagkaroon ng Bullish Crossover (CHoCH/Buy)
+                # 🟩 AUTOMATED BUY SIGNAL (Demand Zone + Bullish Crossover)
                 elif last_candle['low'] <= (demand_zone + 0.20) and prev_candle['close'] < short_ma and last_candle['close'] > short_ma:
                     risk = current_price - demand_zone
                     if risk > 0.15:
@@ -105,7 +99,7 @@ def bot_loop():
                         trade_type = "LONG"
                         entry_target = current_price
                         sl_target = demand_zone - 0.15  # SL sa ilalim ng Demand Zone
-                        tp_target = current_price + (risk * 2.5)  # 2.5:1 Risk-Reward Target
+                        tp_target = current_price + (risk * 2.5)  # 2.5:1 Risk Reward
                         
                         msg = (
                             "🟩🟩🟩🟩🟩🟩🟩🟩🟩\n"
@@ -120,13 +114,12 @@ def bot_loop():
                         send_telegram_alert(msg)
 
             elif bot_state == "IN_TRADE":
-                # Subaybayan kung hit na ang target batay sa bagong structure parameters
                 if trade_type == "SHORT":
                     if current_price <= tp_target:
                         send_telegram_alert(f"🏆 *SMART TAKE PROFIT HIT!* 💰\nGold successfully dropped to ${current_price:,.2f}!")
                         bot_state = "SCANNING"
                     elif current_price >= sl_target:
-                        send_telegram_alert(f"🛑 *SMART STOP LOSS HIT* 📉\nStructure invalid. Closed at ${current_price:,.2f} to protect capital.")
+                        send_telegram_alert(f"🛑 *SMART STOP LOSS HIT* 📉\nClosed at ${current_price:,.2f} to protect capital.")
                         bot_state = "SCANNING"
                         
                 elif trade_type == "LONG":
@@ -134,10 +127,9 @@ def bot_loop():
                         send_telegram_alert(f"🏆 *SMART TAKE PROFIT HIT!* 💰\nGold successfully surged to ${current_price:,.2f}!")
                         bot_state = "SCANNING"
                     elif current_price <= sl_target:
-                        send_telegram_alert(f"🛑 *SMART STOP LOSS HIT* 📉\nStructure invalid. Closed at ${current_price:,.2f} to protect capital.")
+                        send_telegram_alert(f"🛑 *SMART STOP LOSS HIT* 📉\nClosed at ${current_price:,.2f} to protect capital.")
                         bot_state = "SCANNING"
 
-            # Mag-scan bawat 10 segundo
             time.sleep(10)
             
         except Exception as e:
@@ -148,4 +140,4 @@ if __name__ == "__main__":
     t = Thread(target=bot_loop)
     t.start()
     run_web_server()
-    
+          
